@@ -13,6 +13,9 @@ export default function Dashboard() {
   const [callType, setCallType] = useState('audio');
   const [peerName, setPeerName] = useState('');
   const [muted, setMuted] = useState(false);
+  const [cameraOn, setCameraOn] = useState(true);
+  const [facingMode, setFacingMode] = useState('user'); // 'user' | 'environment'
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [error, setError] = useState('');
 
   const peerRef = useRef(null);
@@ -21,6 +24,7 @@ export default function Dashboard() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
+  const overlayRef = useRef(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('gaplashuv_user');
@@ -86,6 +90,14 @@ export default function Dashboard() {
       stopLocalStream();
     };
   }, [me]);
+
+  useEffect(() => {
+    function onFsChange() {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    }
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
 
   function stopLocalStream() {
     if (localStreamRef.current) {
@@ -156,6 +168,9 @@ export default function Dashboard() {
     stopLocalStream();
     setStatus('ready');
     setMuted(false);
+    setCameraOn(true);
+    setFacingMode('user');
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   }
 
   function toggleMute() {
@@ -164,6 +179,52 @@ export default function Dashboard() {
     if (track) {
       track.enabled = !track.enabled;
       setMuted(!track.enabled);
+    }
+  }
+
+  function toggleCamera() {
+    if (!localStreamRef.current) return;
+    const track = localStreamRef.current.getVideoTracks()[0];
+    if (track) {
+      track.enabled = !track.enabled;
+      setCameraOn(track.enabled);
+    }
+  }
+
+  async function switchCamera() {
+    if (!localStreamRef.current || callType !== 'video') return;
+    const nextFacing = facingMode === 'user' ? 'environment' : 'user';
+    try {
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: { facingMode: { exact: nextFacing } },
+      });
+      const newVideoTrack = newStream.getVideoTracks()[0];
+
+      // swap the outgoing track on the live peer connection, if a call is active
+      const pc = activeCallRef.current?.peerConnection;
+      const sender = pc?.getSenders().find((s) => s.track && s.track.kind === 'video');
+      if (sender) await sender.replaceTrack(newVideoTrack);
+
+      // stop the old video track, keep using the existing audio track
+      localStreamRef.current.getVideoTracks().forEach((t) => t.stop());
+      const oldAudioTrack = localStreamRef.current.getAudioTracks()[0];
+      const combined = new MediaStream([newVideoTrack, ...(oldAudioTrack ? [oldAudioTrack] : [])]);
+      localStreamRef.current = combined;
+      if (localVideoRef.current) localVideoRef.current.srcObject = combined;
+      setFacingMode(nextFacing);
+      newStream.getAudioTracks().forEach((t) => t.stop());
+    } catch (err) {
+      setError("Kamera almashtirilmadi — qurilmada faqat bitta kamera bo'lishi mumkin");
+    }
+  }
+
+  function toggleFullscreen() {
+    if (!overlayRef.current) return;
+    if (!document.fullscreenElement) {
+      overlayRef.current.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
     }
   }
 
@@ -287,7 +348,13 @@ export default function Dashboard() {
       </ul>
 
       {inCallOverlay && (
-        <div style={styles.overlay}>
+        <div ref={overlayRef} style={styles.overlay}>
+          {callType === 'video' && status === 'in-call' && (
+            <button style={styles.fullscreenBtn} onClick={toggleFullscreen} title="To'liq ekran">
+              {isFullscreen ? '⤡' : '⤢'}
+            </button>
+          )}
+
           <div style={styles.overlayName}>{peerName}</div>
           <div style={styles.overlayState}>
             {status === 'calling' && 'Chaqirilmoqda…'}
@@ -298,7 +365,11 @@ export default function Dashboard() {
           {callType === 'video' && (
             <div style={styles.videoGrid}>
               <video ref={remoteVideoRef} autoPlay playsInline style={styles.remoteVideo} />
-              <video ref={localVideoRef} autoPlay playsInline muted style={styles.localVideo} />
+              {cameraOn ? (
+                <video ref={localVideoRef} autoPlay playsInline muted style={styles.localVideo} />
+              ) : (
+                <div style={styles.localVideoOff}>📷 o'chiq</div>
+              )}
             </div>
           )}
           <audio ref={remoteAudioRef} autoPlay />
@@ -313,7 +384,17 @@ export default function Dashboard() {
             {(status === 'calling' || status === 'in-call') && (
               <>
                 {status === 'in-call' && (
-                  <button style={styles.muteBtn} onClick={toggleMute}>{muted ? 'Ovozni yoqish' : 'Ovozsiz'}</button>
+                  <>
+                    <button style={styles.muteBtn} onClick={toggleMute}>{muted ? 'Ovozni yoqish' : 'Ovozsiz'}</button>
+                    {callType === 'video' && (
+                      <>
+                        <button style={styles.muteBtn} onClick={toggleCamera}>
+                          {cameraOn ? 'Kamerani o\'chirish' : 'Kamerani yoqish'}
+                        </button>
+                        <button style={styles.muteBtn} onClick={switchCamera} title="Kamerani almashtirish">🔄</button>
+                      </>
+                    )}
+                  </>
                 )}
                 <button style={styles.declineBtn} onClick={endCall}>Tugatish</button>
               </>
@@ -349,12 +430,18 @@ const styles = {
   acceptSmall: { background: 'var(--teal)', color: '#08201a', fontWeight: 600, borderRadius: 8, padding: '8px 12px', fontSize: 13 },
   declineSmall: { background: 'var(--surface-2)', color: 'var(--text)', borderRadius: 8, padding: '8px 12px', fontSize: 13 },
   overlay: { position: 'fixed', inset: 0, background: 'rgba(16,21,28,0.97)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24, zIndex: 10 },
+  fullscreenBtn: { position: 'absolute', top: 16, right: 16, background: 'var(--surface-2)', color: 'var(--text)', borderRadius: 8, width: 36, height: 36, fontSize: 16 },
   overlayName: { fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700 },
   overlayState: { color: 'var(--text-dim)', fontSize: 14, marginBottom: 8 },
   videoGrid: { position: 'relative', width: '100%', maxWidth: 420 },
   remoteVideo: { width: '100%', borderRadius: 14, background: '#000', aspectRatio: '4 / 3', objectFit: 'cover' },
   localVideo: { position: 'absolute', bottom: 12, right: 12, width: '30%', borderRadius: 10, background: '#000', objectFit: 'cover' },
-  overlayActions: { display: 'flex', gap: 12, marginTop: 16 },
+  localVideoOff: {
+    position: 'absolute', bottom: 12, right: 12, width: '30%', aspectRatio: '4 / 3',
+    borderRadius: 10, background: 'var(--surface-2)', color: 'var(--text-dim)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12,
+  },
+  overlayActions: { display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap', justifyContent: 'center' },
   acceptBtn: { background: 'var(--teal)', color: '#08201a', fontWeight: 600, borderRadius: 10, padding: '12px 22px' },
   declineBtn: { background: 'var(--danger)', color: '#2a0d0c', fontWeight: 600, borderRadius: 10, padding: '12px 22px' },
   muteBtn: { background: 'var(--surface-2)', color: 'var(--text)', borderRadius: 10, padding: '12px 22px' },
