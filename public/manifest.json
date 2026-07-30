@@ -1,0 +1,14 @@
+{
+  "name": "Gaplashuv",
+  "short_name": "Gaplashuv",
+  "description": "Audio va video qo'ng'iroq qilish uchun sodda sayt",
+  "start_url": "/app",
+  "display": "standalone",
+  "background_color": "#10151c",
+  "theme_color": "#10151c",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
