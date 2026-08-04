@@ -8,9 +8,42 @@ brauzer orqali audio/video qo'ng'iroq qilish imkonini beruvchi sodda sayt.
 - Endi hech kim to'g'ridan-to'g'ri qo'ng'iroq qila olmaydi: avval username orqali
   **kontakt so'rovi** yuboriladi, qarshi tomon uni qabul qilgach, ikkovi bir-biriga
   qo'ng'iroq qila oladigan bo'ladi.
+- Telefonda video qo'ng'iroq har doim **to'liq ekranda** ochiladi; kompyuterda
+  kichik oyna sifatida boshlanadi, kengaytirish tugmasi (⤢) orqali to'liq
+  ekranga o'tkazish mumkin.
+- **Push-xabarnoma**: brauzer/ilova ochilib, ruxsat berilgan bo'lsa, qo'ng'iroq
+  kelganda tab yoki ilova fonda bo'lsa ham bildirishnoma chiqadi (pastdagi
+  "Push-xabarnomalarni sozlash" bo'limiga qarang).
 - Qo'ng'iroqlar WebRTC orqali to'g'ridan-to'g'ri brauzerlar orasida boradi
   (ovoz/video serverga saqlanmaydi, faqat kontaktlar ro'yxati va "kim onlayn"
   degan ma'lumot saqlanadi).
+
+## Push-xabarnomalarni sozlash (VAPID kalitlari)
+
+Qo'ng'iroq kelganda odam ilovani ochib turmasa ham bildirishnoma chiqishi uchun
+Vercel loyihangizga quyidagi muhit o'zgaruvchilarini qo'shing (Project →
+Settings → Environment Variables):
+
+```
+NEXT_PUBLIC_VAPID_PUBLIC_KEY=BMpfNop_ViflxZ0d88uIWJa4CrO9_kco_KWxkSjjhUddn5SszPUhiAH1YV79uREUTnkCxg8h3zUdp4cseYm1dIk
+VAPID_PRIVATE_KEY=jJGrdroDJRRoV-yb2kXOAwj7ik8c2XTTZ3FNyZtzEdw
+VAPID_SUBJECT=mailto:sizning-emailingiz@example.com
+```
+
+(Bu tayyor, ishlaydigan kalit juftligi — o'zingiz uchun boshqasini yaratmoqchi
+bo'lsangiz, `npx web-push generate-vapid-keys` buyrug'ini ishlating.)
+
+Qo'shgach, qayta deploy qiling. Saytga kirganingizda brauzer bildirishnoma
+ruxsatini so'raydi — "Ruxsat berish" bosilsa, endi tab yopiq/fonda bo'lganda
+ham qo'ng'iroq haqida bildirishnoma keladi.
+
+**Muhim cheklov**: bu — brauzer/PWA darajasidagi push, native ilova emas.
+Android'da yaxshi ishlaydi (hatto ilova to'liq yopilgan bo'lsa ham, agar u
+"Bosh ekranga qo'shilgan" bo'lsa). iPhone'da faqat "Bosh ekranga qo'shilgan"
+holatda ishlaydi (Safari orqali to'g'ridan-to'g'ri ochilgan tab'da emas).
+Odam telefonini butunlay o'chirib qo'ysa yoki ilovani "majburiy yopsa"
+(force-quit), hech qanday texnologiya bildirishnoma yubora olmaydi — bu faqat
+haqiqiy operatsion tizim darajasidagi (App Store) ilovalarda hal qilinadi.
 
 ## Vercel'ga joylashtirish (bosqichma-bosqich)
 

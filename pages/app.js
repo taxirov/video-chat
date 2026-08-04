@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
+import { Mic, MicOff, Video, VideoOff, SwitchCamera, PhoneOff, Phone, Maximize2, Minimize2 } from 'lucide-react';
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+}
 
 export default function Dashboard() {
   const router = useRouter();
@@ -14,8 +22,9 @@ export default function Dashboard() {
   const [peerName, setPeerName] = useState('');
   const [muted, setMuted] = useState(false);
   const [cameraOn, setCameraOn] = useState(true);
-  const [facingMode, setFacingMode] = useState('user'); // 'user' | 'environment'
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [facingMode, setFacingMode] = useState('user');
+  const [isMobile, setIsMobile] = useState(false);
+  const [expanded, setExpanded] = useState(false); // desktop-only manual toggle
   const [error, setError] = useState('');
 
   const peerRef = useRef(null);
@@ -24,7 +33,6 @@ export default function Dashboard() {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
-  const overlayRef = useRef(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('gaplashuv_user');
@@ -33,8 +41,10 @@ export default function Dashboard() {
       return;
     }
     setMe(JSON.parse(saved));
+    setIsMobile(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth <= 768);
   }, []);
 
+  // presence + contacts/requests polling
   useEffect(() => {
     if (!me) return;
     async function beat() {
@@ -68,6 +78,7 @@ export default function Dashboard() {
     };
   }, [me]);
 
+  // persistent Peer connection for incoming calls
   useEffect(() => {
     if (!me) return;
     let peer;
@@ -91,13 +102,46 @@ export default function Dashboard() {
     };
   }, [me]);
 
+  // ask for notification permission + subscribe for push, so calls can
+  // reach the person even when this tab isn't focused
   useEffect(() => {
-    function onFsChange() {
-      setIsFullscreen(Boolean(document.fullscreenElement));
+    if (!me) return;
+    async function subscribePush() {
+      try {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+        if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY) return;
+
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') return;
+
+        const reg = await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY),
+          });
+        }
+        await fetch('/api/push-subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: me.username, subscription: sub }),
+        });
+      } catch (err) {
+        // push not supported / permission denied — calling still works while the app is open
+      }
     }
-    document.addEventListener('fullscreenchange', onFsChange);
-    return () => document.removeEventListener('fullscreenchange', onFsChange);
-  }, []);
+    subscribePush();
+  }, [me]);
+
+  // fix: the local preview <video> only exists in the DOM once the call
+  // overlay is mounted (status !== 'ready'), so assign the stream here,
+  // after render, instead of at the moment getUserMedia resolves.
+  useEffect(() => {
+    if (localVideoRef.current && localStreamRef.current && callType === 'video' && cameraOn) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+    }
+  }, [status, cameraOn, callType]);
 
   function stopLocalStream() {
     if (localStreamRef.current) {
@@ -115,10 +159,10 @@ export default function Dashboard() {
     try {
       const stream = await getStream(type === 'video');
       localStreamRef.current = stream;
-      if (type === 'video' && localVideoRef.current) localVideoRef.current.srcObject = stream;
       setPeerName(name);
       setCallType(type);
       setStatus('calling');
+
       const call = peerRef.current.call(`gaplashuv-${username}`, stream, { metadata: { fromName: me.name, type } });
       activeCallRef.current = call;
       call.on('stream', (remoteStream) => {
@@ -127,6 +171,13 @@ export default function Dashboard() {
       });
       call.on('close', endCall);
       call.on('error', () => { setError('Qo\'ng\'iroqda xatolik yuz berdi'); endCall(); });
+
+      // best-effort push notification in case the other side's tab isn't open
+      fetch('/api/notify-call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: username, fromName: me.name, type }),
+      }).catch(() => {});
     } catch (err) {
       setError('Mikrofon/kameraga ruxsat berilmadi');
     }
@@ -137,7 +188,6 @@ export default function Dashboard() {
     try {
       const stream = await getStream(callType === 'video');
       localStreamRef.current = stream;
-      if (callType === 'video' && localVideoRef.current) localVideoRef.current.srcObject = stream;
       const call = activeCallRef.current;
       call.answer(stream);
       call.on('stream', (remoteStream) => {
@@ -170,7 +220,7 @@ export default function Dashboard() {
     setMuted(false);
     setCameraOn(true);
     setFacingMode('user');
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    setExpanded(false);
   }
 
   function toggleMute() {
@@ -201,12 +251,10 @@ export default function Dashboard() {
       });
       const newVideoTrack = newStream.getVideoTracks()[0];
 
-      // swap the outgoing track on the live peer connection, if a call is active
       const pc = activeCallRef.current?.peerConnection;
       const sender = pc?.getSenders().find((s) => s.track && s.track.kind === 'video');
       if (sender) await sender.replaceTrack(newVideoTrack);
 
-      // stop the old video track, keep using the existing audio track
       localStreamRef.current.getVideoTracks().forEach((t) => t.stop());
       const oldAudioTrack = localStreamRef.current.getAudioTracks()[0];
       const combined = new MediaStream([newVideoTrack, ...(oldAudioTrack ? [oldAudioTrack] : [])]);
@@ -219,15 +267,6 @@ export default function Dashboard() {
     }
   }
 
-  function toggleFullscreen() {
-    if (!overlayRef.current) return;
-    if (!document.fullscreenElement) {
-      overlayRef.current.requestFullscreen?.().catch(() => {});
-    } else {
-      document.exitFullscreen?.().catch(() => {});
-    }
-  }
-
   async function sendRequest(e) {
     e.preventDefault();
     setAddMsg('');
@@ -237,9 +276,8 @@ export default function Dashboard() {
       body: JSON.stringify({ from: me.username, to: addUsername }),
     });
     const data = await res.json();
-    if (!res.ok) {
-      setAddMsg(data.error);
-    } else {
+    if (!res.ok) setAddMsg(data.error);
+    else {
       setAddMsg("So'rov yuborildi ✓");
       setAddUsername('');
     }
@@ -267,6 +305,7 @@ export default function Dashboard() {
   if (!me) return null;
 
   const inCallOverlay = ['calling', 'incoming', 'in-call'].includes(status);
+  const isVideoFull = callType === 'video' && (isMobile || expanded);
 
   return (
     <div style={styles.page}>
@@ -281,12 +320,7 @@ export default function Dashboard() {
       {error && <p style={styles.error}>{error}</p>}
 
       <form onSubmit={sendRequest} style={styles.addForm}>
-        <input
-          style={styles.addInput}
-          value={addUsername}
-          onChange={(e) => setAddUsername(e.target.value)}
-          placeholder="username kiriting"
-        />
+        <input style={styles.addInput} value={addUsername} onChange={(e) => setAddUsername(e.target.value)} placeholder="username kiriting" />
         <button type="submit" style={styles.addBtn}>So'rov yuborish</button>
       </form>
       {addMsg && <p style={styles.addMsg}>{addMsg}</p>}
@@ -330,80 +364,100 @@ export default function Dashboard() {
               </div>
             </div>
             <div style={styles.itemActions}>
-              <button
-                style={{ ...styles.callBtn, opacity: u.online && status === 'ready' ? 1 : 0.4 }}
-                disabled={!u.online || status !== 'ready'}
-                onClick={() => startCall(u.username, u.name, 'audio')}
-                title="Audio qo'ng'iroq"
-              >📞</button>
-              <button
-                style={{ ...styles.callBtn, opacity: u.online && status === 'ready' ? 1 : 0.4 }}
-                disabled={!u.online || status !== 'ready'}
-                onClick={() => startCall(u.username, u.name, 'video')}
-                title="Video qo'ng'iroq"
-              >🎥</button>
+              <button style={{ ...styles.callBtn, opacity: u.online && status === 'ready' ? 1 : 0.4 }} disabled={!u.online || status !== 'ready'} onClick={() => startCall(u.username, u.name, 'audio')} title="Audio qo'ng'iroq">📞</button>
+              <button style={{ ...styles.callBtn, opacity: u.online && status === 'ready' ? 1 : 0.4 }} disabled={!u.online || status !== 'ready'} onClick={() => startCall(u.username, u.name, 'video')} title="Video qo'ng'iroq">🎥</button>
             </div>
           </li>
         ))}
       </ul>
 
       {inCallOverlay && (
-        <div ref={overlayRef} style={styles.overlay}>
-          {callType === 'video' && status === 'in-call' && (
-            <button style={styles.fullscreenBtn} onClick={toggleFullscreen} title="To'liq ekran">
-              {isFullscreen ? '⤡' : '⤢'}
+        <div style={{ ...styles.overlay, background: isVideoFull ? '#000' : 'rgba(16,21,28,0.97)' }}>
+          {callType === 'video' && !isMobile && status === 'in-call' && (
+            <button style={{ ...styles.iconBtnSmall, position: 'absolute', top: 16, right: 16, zIndex: 3 }} onClick={() => setExpanded((v) => !v)} title="Kattalashtirish">
+              {expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
             </button>
           )}
 
-          <div style={styles.overlayName}>{peerName}</div>
-          <div style={styles.overlayState}>
-            {status === 'calling' && 'Chaqirilmoqda…'}
-            {status === 'incoming' && `${callType === 'video' ? 'Video' : 'Audio'} qo'ng'iroq`}
-            {status === 'in-call' && 'Suhbat davom etmoqda'}
-          </div>
-
-          {callType === 'video' && (
-            <div style={styles.videoGrid}>
-              <video ref={remoteVideoRef} autoPlay playsInline style={styles.remoteVideo} />
+          {isVideoFull ? (
+            <>
+              <video ref={remoteVideoRef} autoPlay playsInline style={styles.fullRemoteVideo} />
               {cameraOn ? (
-                <video ref={localVideoRef} autoPlay playsInline muted style={styles.localVideo} />
+                <video ref={localVideoRef} autoPlay playsInline muted style={styles.fullLocalVideo} />
               ) : (
-                <div style={styles.localVideoOff}>📷 o'chiq</div>
+                <div style={styles.fullLocalVideoOff}><VideoOff size={20} color="var(--text-dim)" /></div>
               )}
-            </div>
+              <div style={styles.fullTopBar}>
+                <div style={styles.overlayName}>{peerName}</div>
+                <div style={styles.overlayStateFull}>
+                  {status === 'calling' && 'Chaqirilmoqda…'}
+                  {status === 'incoming' && `${callType === 'video' ? 'Video' : 'Audio'} qo'ng'iroq`}
+                  {status === 'in-call' && 'Suhbat davom etmoqda'}
+                </div>
+              </div>
+              <div style={styles.fullBottomBar}>{renderControls()}</div>
+            </>
+          ) : (
+            <>
+              <div style={styles.overlayName}>{peerName}</div>
+              <div style={styles.overlayState}>
+                {status === 'calling' && 'Chaqirilmoqda…'}
+                {status === 'incoming' && `${callType === 'video' ? 'Video' : 'Audio'} qo'ng'iroq`}
+                {status === 'in-call' && 'Suhbat davom etmoqda'}
+              </div>
+              {callType === 'video' && (
+                <div style={styles.videoGrid}>
+                  <video ref={remoteVideoRef} autoPlay playsInline style={styles.remoteVideo} />
+                  {cameraOn ? (
+                    <video ref={localVideoRef} autoPlay playsInline muted style={styles.localVideo} />
+                  ) : (
+                    <div style={styles.localVideoOff}><VideoOff size={18} color="var(--text-dim)" /></div>
+                  )}
+                </div>
+              )}
+              <div style={styles.overlayActions}>{renderControls()}</div>
+            </>
           )}
           <audio ref={remoteAudioRef} autoPlay />
-
-          <div style={styles.overlayActions}>
-            {status === 'incoming' && (
-              <>
-                <button style={styles.acceptBtn} onClick={acceptCall}>Qabul qilish</button>
-                <button style={styles.declineBtn} onClick={declineCall}>Rad etish</button>
-              </>
-            )}
-            {(status === 'calling' || status === 'in-call') && (
-              <>
-                {status === 'in-call' && (
-                  <>
-                    <button style={styles.muteBtn} onClick={toggleMute}>{muted ? 'Ovozni yoqish' : 'Ovozsiz'}</button>
-                    {callType === 'video' && (
-                      <>
-                        <button style={styles.muteBtn} onClick={toggleCamera}>
-                          {cameraOn ? 'Kamerani o\'chirish' : 'Kamerani yoqish'}
-                        </button>
-                        <button style={styles.muteBtn} onClick={switchCamera} title="Kamerani almashtirish">🔄</button>
-                      </>
-                    )}
-                  </>
-                )}
-                <button style={styles.declineBtn} onClick={endCall}>Tugatish</button>
-              </>
-            )}
-          </div>
         </div>
       )}
     </div>
   );
+
+  function renderControls() {
+    return (
+      <>
+        {status === 'incoming' && (
+          <>
+            <button style={styles.acceptCircle} onClick={acceptCall} title="Qabul qilish"><Phone size={22} /></button>
+            <button style={styles.declineCircle} onClick={declineCall} title="Rad etish"><PhoneOff size={22} /></button>
+          </>
+        )}
+        {(status === 'calling' || status === 'in-call') && (
+          <>
+            {status === 'in-call' && (
+              <>
+                <button style={muted ? styles.iconBtnOff : styles.iconBtn} onClick={toggleMute} title={muted ? 'Ovozni yoqish' : 'Ovozsiz'}>
+                  {muted ? <MicOff size={20} /> : <Mic size={20} />}
+                </button>
+                {callType === 'video' && (
+                  <>
+                    <button style={!cameraOn ? styles.iconBtnOff : styles.iconBtn} onClick={toggleCamera} title={cameraOn ? 'Kamerani o\'chirish' : 'Kamerani yoqish'}>
+                      {cameraOn ? <Video size={20} /> : <VideoOff size={20} />}
+                    </button>
+                    <button style={styles.iconBtn} onClick={switchCamera} title="Kamerani almashtirish">
+                      <SwitchCamera size={20} />
+                    </button>
+                  </>
+                )}
+              </>
+            )}
+            <button style={styles.declineCircle} onClick={endCall} title="Tugatish"><PhoneOff size={22} /></button>
+          </>
+        )}
+      </>
+    );
+  }
 }
 
 const styles = {
@@ -429,20 +483,27 @@ const styles = {
   callBtn: { background: 'var(--surface-2)', borderRadius: 10, width: 40, height: 40, fontSize: 17 },
   acceptSmall: { background: 'var(--teal)', color: '#08201a', fontWeight: 600, borderRadius: 8, padding: '8px 12px', fontSize: 13 },
   declineSmall: { background: 'var(--surface-2)', color: 'var(--text)', borderRadius: 8, padding: '8px 12px', fontSize: 13 },
-  overlay: { position: 'fixed', inset: 0, background: 'rgba(16,21,28,0.97)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24, zIndex: 10 },
-  fullscreenBtn: { position: 'absolute', top: 16, right: 16, background: 'var(--surface-2)', color: 'var(--text)', borderRadius: 8, width: 36, height: 36, fontSize: 16 },
-  overlayName: { fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700 },
+
+  overlay: { position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24, zIndex: 10 },
+  overlayName: { fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, color: '#fff' },
   overlayState: { color: 'var(--text-dim)', fontSize: 14, marginBottom: 8 },
+  overlayStateFull: { color: 'rgba(255,255,255,0.75)', fontSize: 13 },
+
   videoGrid: { position: 'relative', width: '100%', maxWidth: 420 },
   remoteVideo: { width: '100%', borderRadius: 14, background: '#000', aspectRatio: '4 / 3', objectFit: 'cover' },
   localVideo: { position: 'absolute', bottom: 12, right: 12, width: '30%', borderRadius: 10, background: '#000', objectFit: 'cover' },
-  localVideoOff: {
-    position: 'absolute', bottom: 12, right: 12, width: '30%', aspectRatio: '4 / 3',
-    borderRadius: 10, background: 'var(--surface-2)', color: 'var(--text-dim)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12,
-  },
-  overlayActions: { display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap', justifyContent: 'center' },
-  acceptBtn: { background: 'var(--teal)', color: '#08201a', fontWeight: 600, borderRadius: 10, padding: '12px 22px' },
-  declineBtn: { background: 'var(--danger)', color: '#2a0d0c', fontWeight: 600, borderRadius: 10, padding: '12px 22px' },
-  muteBtn: { background: 'var(--surface-2)', color: 'var(--text)', borderRadius: 10, padding: '12px 22px' },
+  localVideoOff: { position: 'absolute', bottom: 12, right: 12, width: '30%', aspectRatio: '4 / 3', borderRadius: 10, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+
+  fullRemoteVideo: { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' },
+  fullLocalVideo: { position: 'absolute', top: 70, right: 16, width: 96, height: 128, borderRadius: 12, objectFit: 'cover', border: '1px solid rgba(255,255,255,0.2)', zIndex: 2 },
+  fullLocalVideoOff: { position: 'absolute', top: 70, right: 16, width: 96, height: 128, borderRadius: 12, background: 'rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2 },
+  fullTopBar: { position: 'absolute', top: 0, left: 0, right: 0, padding: '20px 20px 40px', background: 'linear-gradient(to bottom, rgba(0,0,0,0.6), transparent)', zIndex: 1 },
+  fullBottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: '40px 20px 28px', background: 'linear-gradient(to top, rgba(0,0,0,0.7), transparent)', display: 'flex', gap: 16, justifyContent: 'center', zIndex: 1 },
+
+  overlayActions: { display: 'flex', gap: 16, marginTop: 16, flexWrap: 'wrap', justifyContent: 'center' },
+  iconBtn: { width: 52, height: 52, borderRadius: '50%', background: 'rgba(255,255,255,0.14)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  iconBtnOff: { width: 52, height: 52, borderRadius: '50%', background: 'var(--danger)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  iconBtnSmall: { width: 40, height: 40, borderRadius: '50%', background: 'rgba(255,255,255,0.14)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  acceptCircle: { width: 56, height: 56, borderRadius: '50%', background: 'var(--teal)', color: '#08201a', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  declineCircle: { width: 56, height: 56, borderRadius: '50%', background: 'var(--danger)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' },
 };
