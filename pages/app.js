@@ -25,11 +25,14 @@ export default function Dashboard() {
   const [facingMode, setFacingMode] = useState('user');
   const [isMobile, setIsMobile] = useState(false);
   const [expanded, setExpanded] = useState(false); // desktop-only manual toggle
+  const [remoteMicOff, setRemoteMicOff] = useState(false);
+  const [remoteCameraOff, setRemoteCameraOff] = useState(false);
   const [error, setError] = useState('');
 
   const peerRef = useRef(null);
   const localStreamRef = useRef(null);
   const activeCallRef = useRef(null);
+  const dataConnRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
@@ -133,6 +136,11 @@ export default function Dashboard() {
         setStatus('incoming');
         activeCallRef.current = incomingCall;
       });
+
+      peer.on('connection', (conn) => {
+        dataConnRef.current = conn;
+        attachDataHandlers(conn);
+      });
     });
 
     // when the phone screen turns back on / app returns to foreground,
@@ -222,6 +230,10 @@ export default function Dashboard() {
       call.on('close', endCall);
       call.on('error', () => { setError('Qo\'ng\'iroqda xatolik yuz berdi'); endCall(); });
 
+      const conn = peerRef.current.connect(`gaplashuv-${username}`);
+      dataConnRef.current = conn;
+      attachDataHandlers(conn);
+
       // best-effort push notification in case the other side's tab isn't open
       fetch('/api/notify-call', {
         method: 'POST',
@@ -252,9 +264,22 @@ export default function Dashboard() {
   }
 
   function declineCall() {
+    dataConnRef.current?.open && dataConnRef.current.send({ type: 'hangup' });
     activeCallRef.current && activeCallRef.current.close();
     activeCallRef.current = null;
     setStatus('ready');
+  }
+
+  function attachDataHandlers(conn) {
+    conn.on('data', (data) => {
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'hangup') endCall(true);
+      else if (data.type === 'mic') setRemoteMicOff(!!data.off);
+      else if (data.type === 'camera') setRemoteCameraOff(!!data.off);
+    });
+    conn.on('close', () => {
+      dataConnRef.current = null;
+    });
   }
 
   function attachRemoteStream(stream, type) {
@@ -262,15 +287,25 @@ export default function Dashboard() {
     else if (remoteAudioRef.current) remoteAudioRef.current.srcObject = stream;
   }
 
-  function endCall() {
+  function endCall(skipSignal) {
+    if (!skipSignal && dataConnRef.current?.open) {
+      dataConnRef.current.send({ type: 'hangup' });
+    }
     activeCallRef.current && activeCallRef.current.close();
     activeCallRef.current = null;
+    if (dataConnRef.current) {
+      const conn = dataConnRef.current;
+      dataConnRef.current = null;
+      setTimeout(() => conn.close(), 200);
+    }
     stopLocalStream();
     setStatus('ready');
     setMuted(false);
     setCameraOn(true);
     setFacingMode('user');
     setExpanded(false);
+    setRemoteMicOff(false);
+    setRemoteCameraOff(false);
   }
 
   function toggleMute() {
@@ -279,6 +314,7 @@ export default function Dashboard() {
     if (track) {
       track.enabled = !track.enabled;
       setMuted(!track.enabled);
+      dataConnRef.current?.open && dataConnRef.current.send({ type: 'mic', off: !track.enabled });
     }
   }
 
@@ -288,6 +324,7 @@ export default function Dashboard() {
     if (track) {
       track.enabled = !track.enabled;
       setCameraOn(track.enabled);
+      dataConnRef.current?.open && dataConnRef.current.send({ type: 'camera', off: !track.enabled });
     }
   }
 
@@ -433,13 +470,21 @@ export default function Dashboard() {
           {isVideoFull ? (
             <>
               <video ref={remoteVideoRef} autoPlay playsInline style={styles.fullRemoteVideo} />
+              {remoteCameraOff && status === 'in-call' && (
+                <div style={styles.remoteCameraOffOverlay}>
+                  <VideoOff size={28} color="rgba(255,255,255,0.6)" />
+                  <span>{peerName} kamerasini o'chirdi</span>
+                </div>
+              )}
               {cameraOn ? (
                 <video ref={localVideoRef} autoPlay playsInline muted style={styles.fullLocalVideo} />
               ) : (
                 <div style={styles.fullLocalVideoOff}><VideoOff size={20} color="var(--text-dim)" /></div>
               )}
               <div style={styles.fullTopBar}>
-                <div style={styles.overlayName}>{peerName}</div>
+                <div style={styles.overlayName}>
+                  {peerName} {remoteMicOff && <MicOff size={16} style={{ verticalAlign: 'middle', marginLeft: 6 }} />}
+                </div>
                 <div style={styles.overlayStateFull}>
                   {status === 'calling' && 'Chaqirilmoqda…'}
                   {status === 'incoming' && `${callType === 'video' ? 'Video' : 'Audio'} qo'ng'iroq`}
@@ -450,7 +495,9 @@ export default function Dashboard() {
             </>
           ) : (
             <>
-              <div style={styles.overlayName}>{peerName}</div>
+              <div style={styles.overlayName}>
+                {peerName} {remoteMicOff && <MicOff size={16} style={{ verticalAlign: 'middle', marginLeft: 6 }} />}
+              </div>
               <div style={styles.overlayState}>
                 {status === 'calling' && 'Chaqirilmoqda…'}
                 {status === 'incoming' && `${callType === 'video' ? 'Video' : 'Audio'} qo'ng'iroq`}
@@ -459,6 +506,12 @@ export default function Dashboard() {
               {callType === 'video' && (
                 <div style={styles.videoGrid}>
                   <video ref={remoteVideoRef} autoPlay playsInline style={styles.remoteVideo} />
+                  {remoteCameraOff && status === 'in-call' && (
+                    <div style={styles.remoteCameraOffOverlaySmall}>
+                      <VideoOff size={22} color="rgba(255,255,255,0.6)" />
+                      <span>Kamera o'chirilgan</span>
+                    </div>
+                  )}
                   {cameraOn ? (
                     <video ref={localVideoRef} autoPlay playsInline muted style={styles.localVideo} />
                   ) : (
@@ -545,12 +598,21 @@ const styles = {
   remoteVideo: { width: '100%', borderRadius: 14, background: '#000', aspectRatio: '4 / 3', objectFit: 'cover' },
   localVideo: { position: 'absolute', bottom: 12, right: 12, width: '30%', borderRadius: 10, background: '#000', objectFit: 'cover' },
   localVideoOff: { position: 'absolute', bottom: 12, right: 12, width: '30%', aspectRatio: '4 / 3', borderRadius: 10, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  remoteCameraOffOverlaySmall: {
+    position: 'absolute', inset: 0, borderRadius: 14, background: 'rgba(0,0,0,0.55)',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8,
+    color: 'rgba(255,255,255,0.75)', fontSize: 13,
+  },
 
   fullRemoteVideo: { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' },
   fullLocalVideo: { position: 'absolute', top: 70, right: 16, width: 96, height: 128, borderRadius: 12, objectFit: 'cover', border: '1px solid rgba(255,255,255,0.2)', zIndex: 2 },
   fullLocalVideoOff: { position: 'absolute', top: 70, right: 16, width: 96, height: 128, borderRadius: 12, background: 'rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2 },
   fullTopBar: { position: 'absolute', top: 0, left: 0, right: 0, padding: '20px 20px 40px', background: 'linear-gradient(to bottom, rgba(0,0,0,0.6), transparent)', zIndex: 1 },
   fullBottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: '40px 20px 28px', background: 'linear-gradient(to top, rgba(0,0,0,0.7), transparent)', display: 'flex', gap: 16, justifyContent: 'center', zIndex: 1 },
+  remoteCameraOffOverlay: {
+    position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10,
+    color: 'rgba(255,255,255,0.75)', fontSize: 14, zIndex: 1,
+  },
 
   overlayActions: { display: 'flex', gap: 16, marginTop: 16, flexWrap: 'wrap', justifyContent: 'center' },
   iconBtn: { width: 52, height: 52, borderRadius: '50%', background: 'rgba(255,255,255,0.14)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' },
