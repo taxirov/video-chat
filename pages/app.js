@@ -82,13 +82,41 @@ export default function Dashboard() {
   useEffect(() => {
     if (!me) return;
     let peer;
+    let reconnectTimer;
+
     import('peerjs').then(({ default: Peer }) => {
       peer = new Peer(`gaplashuv-${me.username}`);
       peerRef.current = peer;
-      peer.on('open', () => setStatus('ready'));
-      peer.on('error', (err) =>
-        setError(err.type === 'peer-unavailable' ? 'Bu foydalanuvchi hozir onlayn emas' : err.message)
-      );
+
+      peer.on('open', () => {
+        setStatus('ready');
+        setError('');
+      });
+
+      peer.on('disconnected', () => {
+        // socket dropped (screen locked, tab backgrounded, network switch) —
+        // the Peer object is still alive, just needs to reconnect
+        setStatus('connecting');
+        reconnectTimer = setTimeout(() => {
+          if (peerRef.current && !peerRef.current.destroyed) {
+            peerRef.current.reconnect();
+          }
+        }, 1500);
+      });
+
+      peer.on('close', () => setStatus('connecting'));
+
+      peer.on('error', (err) => {
+        if (err.type === 'peer-unavailable') {
+          setError('Bu foydalanuvchi hozir onlayn emas');
+        } else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error' || err.type === 'socket-closed') {
+          // transient — 'disconnected' handler above will retry; no need to alarm the user
+          setStatus('connecting');
+        } else {
+          setError(err.message);
+        }
+      });
+
       peer.on('call', (incomingCall) => {
         setPeerName(incomingCall.metadata?.fromName || incomingCall.peer);
         setCallType(incomingCall.metadata?.type || 'audio');
@@ -96,7 +124,19 @@ export default function Dashboard() {
         activeCallRef.current = incomingCall;
       });
     });
+
+    // when the phone screen turns back on / app returns to foreground,
+    // check whether we need to reconnect right away instead of waiting
+    function handleVisibility() {
+      if (document.visibilityState === 'visible' && peerRef.current && peerRef.current.disconnected && !peerRef.current.destroyed) {
+        peerRef.current.reconnect();
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility);
+
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      clearTimeout(reconnectTimer);
       peer && peer.destroy();
       stopLocalStream();
     };
@@ -318,6 +358,7 @@ export default function Dashboard() {
       </header>
 
       {error && <p style={styles.error}>{error}</p>}
+      {status === 'connecting' && <p style={styles.reconnecting}>Ulanmoqda…</p>}
 
       <form onSubmit={sendRequest} style={styles.addForm}>
         <input style={styles.addInput} value={addUsername} onChange={(e) => setAddUsername(e.target.value)} placeholder="username kiriting" />
@@ -467,6 +508,7 @@ const styles = {
   username: { color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', fontSize: 13 },
   logout: { background: 'transparent', color: 'var(--text-dim)', border: '1px solid var(--surface-2)', borderRadius: 8, padding: '8px 12px', fontSize: 13 },
   error: { color: 'var(--danger)', fontSize: 13, marginBottom: 12 },
+  reconnecting: { color: 'var(--text-dim)', fontSize: 13, marginBottom: 12 },
   addForm: { display: 'flex', gap: 8, marginBottom: 6 },
   addInput: { flex: 1, background: 'var(--surface)', border: '1px solid var(--surface-2)', borderRadius: 10, padding: '10px 12px', color: 'var(--text)', fontFamily: 'var(--font-mono)', fontSize: 14 },
   addBtn: { background: 'var(--accent)', color: '#1a1206', fontWeight: 600, borderRadius: 10, padding: '10px 14px', fontSize: 13, whiteSpace: 'nowrap' },
