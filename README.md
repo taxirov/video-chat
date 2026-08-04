@@ -18,6 +18,20 @@ brauzer orqali audio/video qo'ng'iroq qilish imkonini beruvchi sodda sayt.
   (ovoz/video serverga saqlanmaydi, faqat kontaktlar ro'yxati va "kim onlayn"
   degan ma'lumot saqlanadi).
 
+## Tarmoq ulanishi (STUN/TURN)
+
+Video/audio qo'ng'iroqlar ikkita qurilma orasida to'g'ridan-to'g'ri (P2P) boradi.
+Ba'zi mobil tarmoqlarda (ayniqsa 4G/5G'da) buning uchun oddiy STUN server
+yetarli bo'lmaydi — shuning uchun loyihaga bepul **TURN server** (Open Relay
+Project) ham qo'shib qo'yilgan. Bu qo'ng'iroqlarning aksariyat tarmoqlarda
+ishlashini ta'minlaydi.
+
+**Eslatma**: bu — bepul, umumiy foydalanish uchun TURN server, cheklangan
+tezlik/hajmga ega. Agar foydalanuvchilar ko'payib, qo'ng'iroqlar ko'p uzilib
+qolsa, buni pullik TURN xizmatiga (masalan [Metered.ca](https://www.metered.ca/tools/openrelay/)
+yoki Twilio) almashtirish tavsiya etiladi — bu `pages/app.js` faylidagi
+`iceServers` ro'yxatini yangilash orqali qilinadi.
+
 ## Push-xabarnomalarni sozlash (VAPID kalitlari)
 
 Qo'ng'iroq kelganda odam ilovani ochib turmasa ham bildirishnoma chiqishi uchun

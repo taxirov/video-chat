@@ -85,7 +85,17 @@ export default function Dashboard() {
     let reconnectTimer;
 
     import('peerjs').then(({ default: Peer }) => {
-      peer = new Peer(`gaplashuv-${me.username}`);
+      peer = new Peer(`gaplashuv-${me.username}`, {
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+          ],
+        },
+      });
       peerRef.current = peer;
 
       peer.on('open', () => {
