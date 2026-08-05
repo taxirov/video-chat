@@ -18,19 +18,36 @@ brauzer orqali audio/video qo'ng'iroq qilish imkonini beruvchi sodda sayt.
   (ovoz/video serverga saqlanmaydi, faqat kontaktlar ro'yxati va "kim onlayn"
   degan ma'lumot saqlanadi).
 
-## Tarmoq ulanishi (STUN/TURN)
+## Tarmoq ulanishi (STUN/TURN) — MUHIM
 
 Video/audio qo'ng'iroqlar ikkita qurilma orasida to'g'ridan-to'g'ri (P2P) boradi.
-Ba'zi mobil tarmoqlarda (ayniqsa 4G/5G'da) buning uchun oddiy STUN server
-yetarli bo'lmaydi — shuning uchun loyihaga bepul **TURN server** (Open Relay
-Project) ham qo'shib qo'yilgan. Bu qo'ng'iroqlarning aksariyat tarmoqlarda
-ishlashini ta'minlaydi.
+Ikkala qurilma **bir xil Wi-Fi**da bo'lsa, odatda hech narsasiz ishlayveradi.
+Lekin ikkalasi **turli tarmoqda** bo'lsa (masalan biri Wi-Fi, biri mobil
+internet — eng ko'p uchraydigan holat!), albatta **TURN server** kerak
+bo'ladi — bu, ikkala tomon orasida signalni "qayta uzatib beruvchi" oraliq
+server.
 
-**Eslatma**: bu — bepul, umumiy foydalanish uchun TURN server, cheklangan
-tezlik/hajmga ega. Agar foydalanuvchilar ko'payib, qo'ng'iroqlar ko'p uzilib
-qolsa, buni pullik TURN xizmatiga (masalan [Metered.ca](https://www.metered.ca/tools/openrelay/)
-yoki Twilio) almashtirish tavsiya etiladi — bu `pages/app.js` faylidagi
-`iceServers` ro'yxatini yangilash orqali qilinadi.
+Buning uchun **bepul Metered.ca hisobi kerak** (kredit karta shart emas):
+
+1. [dashboard.metered.ca](https://dashboard.metered.ca/) da ro'yxatdan o'ting.
+2. Chap menyudan **"TURN Server"** bo'limiga o'ting.
+3. **"Add Credential"** tugmasini bosing — sizga **Username** va **Password**
+   beriladi (loyiha/"Project" yaratish shart emas).
+4. Vercel loyihangizga quyidagi ikkita muhit o'zgaruvchisini qo'shing:
+   ```
+   TURN_USERNAME=<Username qiymati>
+   TURN_CREDENTIAL=<Password qiymati>
+   ```
+5. Qayta deploy qiling.
+
+Loyiha kodi bu ma'lumotlarni `pages/api/ice-servers.js` orqali brauzerga
+uzatadi. Agar bu o'zgaruvchilar qo'yilmagan bo'lsa, sayt faqat STUN bilan
+ishlaydi — bunda **bir xil Wi-Fi'da ishlaydi, lekin turli tarmoqlarda
+ulanmasligi mumkin**.
+
+**Eslatma**: avval loyihada umumiy, hammaga ochiq bepul TURN kaliti bor edi
+("Open Relay Project"ning eskirgan statik kaliti) — bu endi ishlamay qoldi,
+shuning uchun shaxsiy (lekin bepul) Metered.ca kredensiallariga o'tkazildi.
 
 ## Push-xabarnomalarni sozlash (VAPID kalitlari)
 

@@ -87,18 +87,19 @@ export default function Dashboard() {
     let peer;
     let reconnectTimer;
 
-    import('peerjs').then(({ default: Peer }) => {
-      peer = new Peer(`gaplashuv-${me.username}`, {
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-            { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-            { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-          ],
-        },
-      });
+    async function setupPeer() {
+      const { default: Peer } = await import('peerjs');
+
+      let iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+      try {
+        const res = await fetch('/api/ice-servers');
+        const data = await res.json();
+        if (data.iceServers?.length) iceServers = data.iceServers;
+      } catch (e) {
+        // fall back to STUN-only above
+      }
+
+      peer = new Peer(`gaplashuv-${me.username}`, { config: { iceServers } });
       peerRef.current = peer;
 
       peer.on('open', () => {
@@ -141,7 +142,9 @@ export default function Dashboard() {
         dataConnRef.current = conn;
         attachDataHandlers(conn);
       });
-    });
+    }
+
+    setupPeer();
 
     // when the phone screen turns back on / app returns to foreground,
     // check whether we need to reconnect right away instead of waiting
